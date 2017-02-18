@@ -3,6 +3,7 @@ package q251_q300;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedList;
+import java.util.List;
 import java.util.PriorityQueue;
 
 import dataStructure.Interval;;
@@ -145,4 +146,68 @@ public class Q253MeetingRoomsII {
 	    }
 	}
 	
+	public class subQuestions{
+		//sweeping line algorithm
+		public int minMeetingRooms(Interval[] intervals){
+			if(intervals == null || intervals.length == 0) return 0;
+			int len = intervals.length;
+			int[] starts = new int[len], ends = new int[len];
+			int roomInUse = 0;
+			//store start times and end times into array
+			for(int i = 0 ; i < len ; i ++){
+				starts[i] = intervals[i].start;
+				ends[i] = intervals[i].end;
+			}
+			//sort start and ends
+			Arrays.sort(starts);
+			Arrays.sort(ends);
+			int inEnd = 0;
+			for(int i = 0 ; i < len ; i ++){
+				if(ends[inEnd] > starts[i]){
+					roomInUse++;
+				}
+				else{
+					inEnd++;
+				}
+			}
+			return roomInUse;
+		}
+		
+		
+		public List<Interval> RoomUseIntervals(Interval[] intervals){
+
+			List<Interval> res = new LinkedList<Interval>();
+			if(intervals == null || intervals.length == 0) return res;
+			int len = intervals.length;
+			int[] starts = new int[len], ends = new int[len];
+			//store start times and end times into array
+			for(int i = 0 ; i < len ; i ++){
+				starts[i] = intervals[i].start;
+				ends[i] = intervals[i].end;
+			}
+			//sort start and ends
+			Arrays.sort(starts);
+			Arrays.sort(ends);
+			int roomInUse = 0, currTime = 0;
+			int start = 0;
+			for(int i = 0, j = 0 ; i < len && j < len ;){
+				if(starts[i] < ends[j]){
+					roomInUse++;
+					currTime = starts[i];
+					if(roomInUse == 1)
+					start = currTime;
+					i++;
+				}
+				else{
+					roomInUse--;
+					currTime = ends[j];
+					if(roomInUse == 0){
+						res.add(new Interval(start, currTime));
+					}
+					j++;
+				}
+			}
+			return res;
+		}
+	}
 }
