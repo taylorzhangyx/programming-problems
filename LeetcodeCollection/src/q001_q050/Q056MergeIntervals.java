@@ -1,4 +1,4 @@
-package q001_q50;
+package q001_q050;
 
 import java.util.Collections;
 import java.util.Comparator;
