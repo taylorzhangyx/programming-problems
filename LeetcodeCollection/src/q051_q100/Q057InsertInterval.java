@@ -66,6 +66,8 @@ public class Q057InsertInterval {
 					newInterval.start = Math.min(newInterval.start, curr.start);
 					newInterval.end = Math.max(newInterval.end, curr.end);
 				}
+				StringBuilder sb;
+				sb.subt
 			}
 			return res;
 		}
