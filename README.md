@@ -3,6 +3,7 @@ Write and Collected by Yuxin Zhang
 
 ## Table of Content
 - [1. Two Sum](#1-two-sum)
+- [2. Add Two Numbers](#2-add-two-numbers)
 - [41. First Missing Positive](#41-first-missing-positive)
 
 
@@ -53,6 +54,99 @@ public int[] twoSum(int[] nums, int target) {
         }
     }
     return new int[]{0,0};
+}
+```
+
+## 2 Add Two Numbers 
+You are given two non-empty linked lists representing two non-negative integers. The digits are stored in reverse order and each of their nodes contain a single digit. Add the two numbers and return it as a linked list.
+
+You may assume the two numbers do not contain any leading zero, except the number 0 itself.
+
+Input: (2 -> 4 -> 3) + (5 -> 6 -> 4)
+Output: 7 -> 0 -> 8
+
+### Idea
+Use dummy node to handle beginning, use carry to add lists till the shorter one ends.
+Find the rest node add with carry till the end of list
+Handle carry at last
+
+Java
+```java
+public ListNode addTwoNumbers(ListNode l1, ListNode l2) {
+    int carry = 0;
+    ListNode dummy = new ListNode(0), next = dummy;
+    //add num togather
+    while(l1 != null && l2 != null){
+        int sum = l1.val + l2.val + carry;
+        l1 = l1.next;
+        l2 = l2.next;
+        next.next = new ListNode(sum%10);
+        next = next.next;
+        carry = sum/10;
+    }
+    ListNode rest = l1 != null ? l1 : l2;
+    //find the rest list and add with carry
+    while(rest != null){
+        int sum = rest.val + carry;
+        rest = rest.next;
+        next.next = new ListNode(sum%10);
+        next = next.next;
+        carry = sum/10;
+    }
+    //take care of carry
+    if(carry != 0) next.next = new ListNode(carry);
+    return dummy.next;
+}
+```
+
+
+OR
+Scan two lists till no valid node to be handle and carry is 0
+only when != null, add node value and move to next node
+
+
+Python
+```python
+def addTwoNumbers(self, l1, l2):
+    """
+    :type l1: ListNode
+    :type l2: ListNode
+    :rtype: ListNode
+    """
+    dummy = next = ListNode(0)
+    carry = 0
+    while(l1 or l2 or carry):
+        if l1:
+            carry += l1.val
+            l1 = l1.next
+        if l2:
+            carry += l2.val
+            l2 = l2.next
+        carry,val = divmod(carry,10)
+        next.next = ListNode(val)
+        next = next.next
+    return dummy.next
+```
+
+Java
+```java
+public ListNode addTwoNumbers(ListNode l1, ListNode l2) {
+    ListNode dummy = new ListNode(0), n = dummy;
+    int carry = 0;
+    while(l1 != null || l2 != null || carry != 0){
+        if(l1 != null){
+            carry += l1.val;
+            l1 = l1.next;
+        }
+        if(l2 != null){
+            carry += l2.val;
+            l2 = l2.next;
+        }
+        n.next = new ListNode(carry%10);
+        n = n.next;
+        carry = carry/10;
+    }
+    return dummy.next;
 }
 ```
 
