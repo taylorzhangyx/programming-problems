@@ -27,29 +27,34 @@ Space O(n)
 
 Python:
 ```python
-class Solution(object):
-    def twoSum(self, nums, target):
-        """
-        :type nums: List[int]
-        :type target: int
-        :rtype: List[int]
-        """
-        map = {}
-        for i in range(len(nums)):
-            if (target - nums[i]) in map:
-                return [i, map[target - nums[i]]]
-            else:
-                map[nums[i]] = i
+def twoSum(self, nums, target):
+    """
+    :type nums: List[int]
+    :type target: int
+    :rtype: List[int]
+    """
+    map = {}
+    for i in range(len(nums)):
+        if (target - nums[i]) in map:
+            return [i, map[target - nums[i]]]
+        else:
+            map[nums[i]] = i
 ```
 Java:
-
-##### Sort and find
-Sort the array and find pair with two pointers
-Left pointer moves only when the current sum is smaller than target;
-while right pointer move only when the current sum is larger than target.
-Phthon:
-
-
+```java
+public int[] twoSum(int[] nums, int target) {
+    HashMap<Integer, Integer> map = new HashMap<Integer, Integer>();
+    for(int i = 0 ; i < nums.length; i++){
+        if(map.containsKey(target - nums[i])){
+            return new int[]{map.get(target-nums[i]), i};
+        }
+        else{
+            map.put(nums[i], i);
+        }
+    }
+    return new int[]{0,0};
+}
+```
 
 ## 41 First Missing Positive
 Given n non-negative integers representing an elevation map where the width of each bar is 1, compute how much water it is able to trap after raining.
