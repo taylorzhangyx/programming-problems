@@ -1,0 +1,180 @@
+#!/bin/bash
+#author Yuxin Zhang
+#time Aug 7 2017
+
+#define the file name
+result_file="dns_count.log" #the result file of every dns counts
+merged_dns_file="merged_dns_count.log" #the file of merged dns entry counts
+temp_merged_dns_file="temp_merged_dns_count.log"
+
+#define parameters
+timeout=$((60 * 60)) #define the timeout as 1 hour
+
+#move system dnsmasq log file in this local directory
+get_dnsmasq_log()
+{
+    mv /tmp/dnsmasq.log ./
+}
+
+#restart the dnsmasq tool to init a new log file
+restart_dnsmasq()
+{
+    /etc/init.d/dnsmasq restart
+}
+
+#process the current dnsmasq log file 
+get_current_dns_count()
+{
+    #define the name of file containing only query[A]
+    queryA_file="queryA.log"
+
+    #extract the lines with query[A]
+    #override or create the queryA file to put data inside
+    grep "query\[A\]" dnsmasq.log > $queryA_file
+
+    #create new file
+    touch $result_file
+
+    while [ -s $queryA_file ]
+    do
+
+        #extract the first line in the queryA file
+
+        read -r first_line < $queryA_file
+
+        first_line=($first_line)
+        ip=${first_line[7]}
+        declare -A domain_count_dictionary
+        declare -A domain_time_dictionary
+
+        #scan every line, for each line with this ip, count and update time
+        while read line 
+        do
+            if [[ $line == *"$ip"* ]]
+            then
+
+                #use hash table to process
+                matched_line=($line)
+                domain=${matched_line[5]}
+                #add one letter in the entry
+                domain_count_dictionary[$domain]="$((${domain_count_dictionary[$domain]}+1))"
+                #update the time
+                domain_time_dictionary[$domain]="${matched_line[0]} ${matched_line[1]} ${matched_line[2]}"
+            
+            fi
+        done < $queryA_file
+
+        #save and append the result into file
+        for processed_domain in "${!domain_count_dictionary[@]}"
+        do
+            #saved format is "{time} {count} {ip} {dommain}"
+            echo "${domain_time_dictionary[$processed_domain]} ${domain_count_dictionary[$processed_domain]} ${ip} ${processed_domain}" \
+            >> $result_file
+        done
+
+        #remove lines that have been processed
+        sed -i "/$ip/d" $queryA_file
+
+    done
+
+    #clean the temp queryA_file
+    rm $queryA_file
+}
+
+#merge the current result file with merged result file
+merge_dns_count()
+{
+    #define dictrionaries
+    declare -A entry_count_dictionary
+    declare -A entry_time_dictionary
+
+    #create new file if no merged file
+    touch $merged_dns_file
+
+    #read merged date into dictionary
+    while read line
+    do
+        #parse string into chunks
+        line=($line)
+        time="${line[0]} ${line[1]} ${line[2]}"
+        count=${line[3]}
+        entry="${line[4]} ${line[5]}"
+
+        #fill data into dictionary
+        entry_count_dictionary[$entry]=$count
+        entry_time_dictionary[$entry]=$time
+    done < $merged_dns_file
+
+    #read new data into dictionary
+    while read line
+    do
+        #parse string into chunks
+        line=($line)
+
+        time="${line[0]} ${line[1]} ${line[2]}"
+        count="${line[3]}"
+        entry="${line[4]} ${line[5]}"
+
+        if [[ -n entry_count_dictionary[$entry] ]]
+        then
+            #the count is non zero, merge the two entry
+            entry_count_dictionary[$entry]="$((${entry_count_dictionary[$entry]}+$count))"
+        else
+            entry_count_dictionary[$entry]=$count
+        fi
+
+        entry_time_dictionary[$entry]=$time #update the time entry with a later one
+
+    done < $result_file
+
+    #remove the old file
+    #rm $result_file
+    #rm $merged_dns_file
+
+    touch $temp_merged_dns_file
+
+    #save and append the result into file
+    for entry in "${!entry_count_dictionary[@]}"
+    do
+        #saved format is "{time} {count} {ip} {dommain}"
+        echo "${entry_time_dictionary[${entry}]} ${entry_count_dictionary[${entry}]} ${entry}" >> $temp_merged_dns_file
+    done
+}
+
+#clean the timeout entries in the merged file
+clean_timeout_entries()
+{
+    #get the time now in seconds
+    time_now=$( { date +%s; } 2>&1 )
+    while read line_raw
+    do
+        line=($line_raw)
+        time="${line[0]} ${line[1]} ${line[2]}"
+        time_old=$( { date -d"${time}" +%s; } 2>&1 ) #get time in the entry in seconds
+        echo "time_old=${time_old}"
+        time_diff=$(( $time_now - $time_old ))
+        echo "time_diff=${time_diff}"
+        if [[ time_diff -le timeout ]] #less than or equal to
+        then
+            #save lines into merged file
+            echo $line_raw >> $merged_dns_file
+
+            #otherwise don't save
+        fi
+
+    done < $temp_merged_dns_file
+}
+
+
+#main entry point
+dns_collector()
+{
+    get_dnsmasq_log
+    restart_dnsmasq
+    get_current_dns_count
+    merge_dns_count
+    clean_timeout_entries
+}
+
+#----------------------------------------------------------
+dns_collector
