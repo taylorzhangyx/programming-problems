@@ -1,0 +1,574 @@
+#!/bin/bash
+
+#  hl_start.sh
+#  
+#
+#  Created by Navya Krishna Pothineni on 5/27/16.
+#  Simply pings google to check if connected to internet
+#  If connected, sets deviceid and starts agentmgr
+#  If not, keeps pinging.
+# 
+
+# set -x
+
+#--------------------------------------------------------------------------------------
+hl_logf()
+{
+  echo "$(date) [${FUNCNAME[1]}:${BASH_LINENO[0]}] $@" >> $HL_SCR_LOGFILE
+  echo "$(date) [${FUNCNAME[1]}:${BASH_LINENO[0]}] $@" 
+}
+
+hl_set_defaults()
+{
+  HL_PING_ADDR=8.8.8.8       # google.com address
+
+  HL_F_FIRSTSTART=1          # initial startup flag
+  HL_F_INETSTAT=0            # default to internet is down
+
+  HL_SLEEP_INTERVAL=10       # secs between successive inetping up checks (sleep time)
+
+  HL_N_UPCOUNTMAX=$(( 10 * 60 / $HL_SLEEP_INTERVAL))  # 10min equivalent
+  HL_N_UPCOUNT=0                 # running counter to track time between agentmgr while up
+
+  HL_PINGFAIL_MAX=6          # stop agentmgr etc after this many ping failures
+  HL_N_PINGFAIL=0            # initial ping fail count
+
+  HL_IP_ETH=w.x.y.z          # eth  initial IP address
+  HL_IP_WLAN=w.x.y.z         # wlan initial IP address
+
+  HL_GW_MAC=a.b.c.d          # invalid gateway mac address
+
+  HL_DIR_AMGR=/usr/sbin/agentmgr
+  HL_DIR_AMGR_TMP=$HL_DIR_AMGR/tmp
+
+  HL_NAME_AGENTMGR=agentmgr
+  HL_E_AGENTMGR=./agentmgr
+
+  # should probably be in /tmp to avoid writes to sdcard file system
+  HL_LOGFILE=$HL_DIR_AMGR_TMP/agentmgr.log
+  HL_LOGS_KEEP_DAYS=7        # keep this many days worth of logs, delete older logs
+
+  # activity control during "down" time
+  HL_N_DOWNCOUNT=0           # running counter to track time between agentmgr restart while down
+  # when N_DOWNCOUNT reaches this, agentmgr is restarted
+  HL_N_DOWNCOUNTMAX=$(( 10 * 60 / $HL_SLEEP_INTERVAL))  # 10min equivalent
+
+  # firmware update control
+  HL_E_FWUPDATE=$HL_DIR_AMGR/update_firmware.sh # fw update script file
+  HL_V_FWPID=0               # update script pid
+  HL_F_FWUPD=0               # flag to indicate if a firmware update check is needed
+  HL_N_FWCNT=0               # counter to track iteration left to invoke firmware update
+  HL_N_FWCNTMAX=$((4 * 60 * 60 / $HL_SLEEP_INTERVAL)) # 4hr * 60min * #iteration per min
+
+  # check for ssh once every 100 * sleep-interval seconds of inet uptime
+  HL_V_SSHCNTMAX=$((30 * 60 / $HL_SLEEP_INTERVAL)) # check every ~30mins
+  HL_E_SSH=ssh
+  HL_E_SSH_ARGS_GENERATE=$HL_DIR_AMGR/hl_ssh.sh # generate ssh args and places it into args file
+  HL_V_SSH_ARGS_FILE=$HL_DIR_AMGR_TMP/sshargs   # the args file
+  HL_P_SSH=0  # ssh pid
+  HL_C_SSH=0  # ssh restart count
+
+  # get dnsmasq log every 10 minutes
+  HL_N_DNSMASQ_DOWNCOUNT=0
+  HL_N_DNSMASQ_DOWNCOUNTMAX=$((10 * 60 / $HL_SLEEP_INTERVAL)) # set to 10 * 60 seconds
+  
+  # set the device id to be the eth0 mac address
+  MAC="$(cat /sys/class/net/eth0/address)" 
+  export deviceid="${MAC//:}" 
+  export DEVICEID="$deviceid"
+
+  hl_logf "Using deviceid: $deviceid"
+
+  # create the tmp folder if it doesn't exist
+  mkdir -p $HL_DIR_AMGR/tmp
+
+  # file to contain fa registration data (homeid, etc)
+  HL_V_FAREG_FILE=$HL_DIR_AMGR_TMP/homeid             # homeid, etc json written here
+  HL_F_HASXMPP=$HL_DIR_AMGR_TMP/has_xmpp
+  HL_V_CFG_FILE=agentmgr_config.json     # to get the cfghost hostname
+  HL_V_CFGHOSTNAME="config_host_name"    # json id for hostname
+  HL_N_FAREG_COUNT=0                     # count iters since last reg check
+  HL_N_FAREG_MAX=$((10 * 60 / $HL_SLEEP_INTERVAL)) # iters to next reg check (10min * #iters/min)
+
+  # for openwrt, disable bluetooth functions
+  local openwrt=$( uname -a | grep -i openwrt )
+  local sz=${#openwrt}
+  if [[ $sz -gt 0 ]] ; then
+    HL_IS_OPENWRT=1
+    HL_NO_BLE=1
+  fi
+
+  if [ -e $HL_F_HASXMPP ]; then
+    rm -f $HL_F_HASXMPP 
+  fi
+
+  if [ -n "$HL_IS_OPENWRT" ]; then
+    LANIP=$(uci get network.lan.ipaddr)
+    WANIF=$(uci get network.wan.ifname)
+    sed -i "/gateway_ip/ c \"gateway_ip\":\"${LANIP}\", " agentmgr_config.json
+    sed -i "/not_scan_ifs/ c \"not_scan_ifs\":[\"${WANIF}\"], " agentmgr_config.json
+  fi
+  # for debug purposes
+  #HL_NO_BLE=1     # disabled all bluetooth related functions
+  #HL_NO_SSH=1     # disables all ssh related functions
+  #HL_NO_AGENT=1   # disable all agent functions
+  #HL_NO_FWUPD=1   # disable firmware update checks
+  #HL_NO_FAREG=1   # disable FA registration
+}
+
+#--------------------------------------------------------------------------------------
+hl_all_stop()
+{
+  #pkill -9 $HL_NAME_AGENTMGR
+  pgrep $HL_NAME_AGENTMGR | xargs kill 
+  hl_logf "Killing agentmgr"
+}
+
+hl_all_start()
+{
+  touch $HL_LOGFILE
+  $HL_E_AGENTMGR >> $HL_LOGFILE 2>&1  &
+  hl_logf "Started agentmgr (PID:$!)"
+}
+
+# save all the log files in the tmp folder (save everything name *.log)
+# args: flag to save logs: 0 => don't saev, 1 =>compress and save
+hl_logs_compress()
+{
+  if [ $1 -eq 1 ]; then
+    local prefix=$(date +%F.%H-%M-%S)
+    for fname in `ls tmp/*.log`;do
+      hl_logf "Compressing @$prefix: $fname"
+      gzip $fname
+      mv $fname.gz $fname.$prefix.gz
+    done
+    #cd ..
+  fi
+}
+
+#find files older than HL_LOGS_KEEP_DAYS
+hl_logs_purge()
+{
+  hl_logf "Purging files older than $HL_LOGS_KEEP_DAYS days"
+  if [ -z "$HL_IS_OPENWRT" ]; then
+    find $HL_DIR_AMGR_TMP/* -mtime +$HL_LOGS_KEEP_DAYS -exec rm {} \;
+  else
+    hl_logf "  skipping purge for OpenWrt"
+  fi
+
+}
+
+# args: flag to save logs: 0 => don't save, 1 =>compress and save
+hl_all_restart()
+{
+  hl_logf "Restarting all...."
+  HL_N_UPCOUNT=0
+  hl_all_stop
+  hl_logs_compress $@
+  hl_logs_purge # remove old logs
+  hl_all_start
+}
+
+#--------------------------------------------------------------------------------------
+hl_ipaddr_set()
+{
+  HL_IP_ETH=$(ifconfig eth0 2>/dev/null|awk '/inet addr:/ {print $2}'|sed 's/addr://')
+  HL_IP_WLAN=$(ifconfig wlan0 2>/dev/null|awk '/inet addr:/ {print $2}'|sed 's/addr://')
+}
+
+hl_ipaddr_chk()
+{
+  local eth_now=$(ifconfig eth0 2>/dev/null|awk '/inet addr:/ {print $2}'|sed 's/addr://')
+  local wlan_now=$(ifconfig wlan0 2>/dev/null|awk '/inet addr:/ {print $2}'|sed 's/addr://')
+
+  # if ip addr has changed, restart agentmgr
+  if [ "$HL_IP_ETH" != "$eth_now" ] || [ "$HL_IP_WLAN" != "$wlan_now" ]; then
+    hl_logf "IP address change detected"
+    hl_logf "eth0 : was $HL_IP_ETH, now $eth_now"
+    hl_logf "wlan0: was $HL_IP_WLAN, now $wlan_now"
+    HL_IP_ETH=$eth_now
+    HL_IP_WLAN=$wlan_now
+    if [ -z "$HL_NO_AGENT" ]; then
+      hl_all_restart 0
+    fi
+  fi	
+}
+
+#--------------------------------------------------------------------------------------
+# check if agentmgr is running, if not, start it
+hl_agentmgr_chk()
+{
+  local tstvar=$(pgrep $HL_NAME_AGENTMGR)
+  if [ -z "$tstvar" ]; then  #agentmgr not found in ps
+    hl_logf "Agentmgr is dead?? restarting..."
+    hl_all_restart 0
+  fi
+}
+
+#--------------------------------------------------------------------------------------
+# At midnight, start a counter and inititate firmware download if necessary
+# initiate counting between midnight and 1am
+hl_fw_update()
+{
+  local H=$(date +%H)  # get current time
+
+  if [[ ${HL_F_FWUPD} -eq 0 ]]; then  # countdown not started yet
+
+    if (( 10#$H < 1)); then           # past midnight, start the countdown
+      HL_F_FWUPD=1
+      HL_N_FWCNT=$((1 + RANDOM % HL_N_FWCNTMAX))
+      HL_V_FWPID=0
+      hl_logf "HL update (and periodic restart) scheduled in ($HL_N_FWCNT * $HL_SLEEP_INTERVAL) seconds"
+    fi
+
+  else  # countdown has started
+
+    if [[ ${HL_V_FWPID} -eq 0 ]]; then   # fw not updated yet
+
+      if [[ ${HL_N_FWCNT} -eq 0 ]]; then # hit countdown!
+        hl_logf "Periodic restart now!"
+
+        if [ -e $HL_F_HASXMPP ]; then
+          rm -f $HL_F_HASXMPP 
+        fi
+        if [ -z "$HL_NO_AGENT" ]; then
+          hl_all_restart 1 # save all logs now
+        fi
+        $HL_E_FWUPDATE &
+        HL_V_FWPID=$?
+        if [[ ${HL_V_FWPID} -eq 0 ]]; then
+          hl_logf "Unable to start firmware update!!"
+          HL_V_FWPID=1 # force code to wait fro next scheduled restart
+        else
+          hl_logf "Starting firmware update: $HL_E_FWUPDATE (pid $HL_V_FWPID)"
+        fi
+      else
+        ((HL_N_FWCNT--))
+      fi
+
+    else # valid pid
+
+      if (( 10#$H > 2)); then        # reset the flag
+        HL_F_FWUPD=0
+        HL_V_FWPID=0
+      fi
+
+    fi # fwpid
+
+  fi # countdown
+}
+
+#--------------------------------------------------------------------------------------
+# chk ssh still running or not, if not start it
+hl_sshlink_start()
+{
+  if [[ $HL_P_SSH -gt 0 ]]; then
+  	HL_C_SSH=$HL_P_SSH+1
+  	if [[ $HL_C_SSH -gt 10 ]]; then
+  	  kill -9 HL_P_SSH
+  	  HL_P_SSH=0
+  	  HL_C_SSH=0
+  	fi
+  fi
+	
+  # will look for _any_ running ssh client and assume it is ours
+  local tstvar=$(ps | grep "ssh " | grep -v grep)
+  # hl_logf "tstvar is: \"$tstvar\""
+  if [ -z "$tstvar" ]; then  #ssh link is dead
+   if  [ ! -e $HL_V_SSH_ARGS_FILE ]; then
+     hl_logf "$HL_V_SSH_ARGS_FILE not found, getting args now"
+     # get the ssh args from ssh args server
+     $HL_E_SSH_ARGS_GENERATE $deviceid $HL_V_SSH_ARGS_FILE
+   fi
+   tstvar=$( cat $HL_V_SSH_ARGS_FILE )
+   if [[ ${#tstvar} -lt 10 ]]; then
+     hl_logf "SSH not started, invalid args: $tstvar"
+     rm -rf $HL_V_SSH_ARGS_FILE
+   else
+     hl_logf "Starting SSH: $HL_E_SSH $tstvar"
+     $HL_E_SSH $tstvar &
+     HL_P_SSH=$!
+   fi
+  else
+    hl_logf "Checking SSH: already running as $tstvar"
+  fi
+}
+
+#  set our check ssh counter to zero, will force a check
+hl_sshlink_reset()
+{
+  # set counter to zero so next check will trigger
+  HL_N_SSHCNT=0
+}
+
+# chk that ssh link is still up, if not restart it
+hl_sshlink_chk()
+{
+  if [[ ${HL_N_SSHCNT} -eq 0 ]]; then
+    HL_N_SSHCNT=$HL_V_SSHCNTMAX
+    hl_sshlink_start
+  else
+    ((HL_N_SSHCNT--))
+  fi
+
+}
+
+#--------------------------------------------------------------------------------------
+# fa registration functions
+
+# get the local gateway mac address
+hl_gateway_mac()
+{
+  # use "$gwip " to ensure there no false matches
+  local gwip=$( route -n | grep -m 1 UG       | awk '{print $2}' )
+  local gwmc=0
+  if [ -z "$HL_IS_OPENWRT" ]; then
+    gwmc=$( arp -n   | grep -m 1 "$gwip " | awk '{print $3}' )
+  else
+    # for openwrt, use /proc/net/arp fs instead of arp
+    # gwmc=$( cat /proc/net/arp | grep -m 1 "$gwip " | awk '{print $4}' )
+    # for openwrt use uci get command 
+      gwmc=$(uci get network.lan.macaddr)
+  fi
+  #echo "$gmac"
+  _HL_RET=$gwmc
+}
+
+# bluetooth related 
+hl_ble_start()
+{
+  if [ -z "$HL_NO_BLE" ] ; then
+    hl_logf "Starting Ble cmd"
+    node ble/hl_ble_cmd.js &
+    hl_logf "Started Ble cmd (PID:$!)"
+  else
+    hl_logf "Disabled: Ble start"
+  fi
+}
+
+hl_ble_stop() 
+{
+  if [ -z "$HL_NO_BLE" ] ; then
+    hl_logf "Stopping Ble cmd"
+    node ble/hl_ble_stop.js &
+    hl_logf "Stopped Ble cmd (PID:$!)"
+  else
+    hl_logf "Disabled: Ble stop"
+  fi
+}
+
+hl_ble_file_mon() 
+{
+  if [ -z "$HL_NO_BLE" ] ; then
+    hl_logf "Start file monitor"
+    ./hl_lanmap_file_mon.sh &
+  else
+    hl_logf "Disabled: File monitor"
+  fi
+}
+
+# attempt registration; for hlabsdemos.com, use the -k option to skip CA cert
+# $1 is the gateway mac address in the format ab:cd:ef:gh:ij:kl
+hl_fa_register()
+{
+  local findsuccess="\"success\":true"
+  local hostname=$( cat $HL_V_CFG_FILE | grep -m 1 $HL_V_CFGHOSTNAME | awk -F'"' '{print $4}' )
+
+  hl_logf "FA register: $hostname, faid $DEVICEID with gw $1"
+
+  # -s: silent, no progress bar, -k: skip ca cert
+  local curlret=$( curl -s -k -H "Content-Type: application/json" -X POST -d "{\"app\":\"redirect\",\"url\":\"https://$hostname:8082/webapp/device?request=register\",\"faid\":\"$DEVICEID\",\"macaddress\":\"$DEVICEID\",\"gwmacaddr\":\"$1\",\"type\":\"fa\"}" https://$hostname/hlabs/main/butler_svc.php/)
+
+  local ax="${curlret%%$findsuccess*}"
+
+  # if registration fails (can't find the success string)
+  if [[ $ax = $curlret ]]; then 
+    hl_logf "Curl failure: $curlret"
+  else #success
+    if [ -e $HL_V_FAREG_FILE ]; then
+      rm -f $HL_V_FAREG_FILE
+    fi
+    HL_FAREG_COMPLETE=1                    # set flag to indicate success
+    echo "$curlret" >> $HL_V_FAREG_FILE    # save the data to file
+    hl_logf "Curl success: $curlret"
+    hl_logf "Written to $HL_V_FAREG_FILE"
+    hl_all_restart 0
+  fi
+}
+
+# if the gateway changed or if we haven't registered succefully yet, register the fa and restart agents
+hl_fa_register_chk()
+{
+  #set -x
+  hl_gateway_mac
+  local hl_new_gw=$_HL_RET
+  if [ "$hl_new_gw" != "$HL_GW_MAC" ]; then
+    unset HL_FAREG_COMPLETE       # clear the flag
+    hl_logf "Gateway changed ($HL_GW_MAC to $hl_new_gw), registering FA"
+    HL_GW_MAC="$hl_new_gw"
+    hl_fa_register $HL_GW_MAC
+    HL_N_FAREG_COUNT=0
+  else  # GW hasn't changed, have we registered already?
+    if [ -z "$HL_FAREG_COMPLETE" ]; then
+      # attempt to register if its time to do so
+      if [ "$HL_N_FAREG_COUNT" -gt "$HL_N_FAREG_MAX" ]; then
+        hl_logf "FA registration attempt"
+        hl_fa_register $HL_GW_MAC
+        HL_N_FAREG_COUNT=0
+      else
+        ((HL_N_FAREG_COUNT++))
+      fi
+    fi
+  fi
+}
+
+# generate the dns record and merge to old
+hl_dns_collector_start()
+{
+  ((HL_N_DNSMASQ_DOWNCOUNT++))
+  if [[ HL_N_DNSMASQ_DOWNCOUNT -gt HL_N_DNSMASQ_DOWNCOUNTMAX ]] ; then
+    ./hl_dnsmasq_collector.sh
+    HL_N_DNSMASQ_DOWNCOUNT=0 #reset the dounter
+  fi
+}
+
+#--------------------------------------------------------------------------------------
+# internet down?
+# check a few times to make sure
+# if it is really down, maybe stop all agents? or do nothing?
+hl_inet_down()
+{
+  #if it was up, but just went down
+  if [[ ${HL_F_INETSTAT} -eq 1 ]]; then
+    ((HL_N_PINGFAIL++))
+    # has been down long enough to conclude really down
+    if [ "$HL_N_PINGFAIL" -gt "$HL_PINGFAIL_MAX" ]; then
+      HL_F_INETSTAT=0
+      hl_logf "Internet down ($HL_N_PINGFAIL)"
+      #hl_all_restart
+      HL_N_DOWNCOUNT=0
+      #hl_ble_start
+    else
+      hl_logf "Ping fail ($HL_N_PINGFAIL)"
+    fi
+  else
+    ((HL_N_DOWNCOUNT++))
+    if [ "$HL_N_DOWNCOUNT" -gt "$HL_N_DOWNCOUNTMAX" ]; then
+      hl_logf "Internet down: down count is $HL_N_DOWNCOUNT..."
+      #hl_all_restart
+      HL_N_DOWNCOUNT=0
+    fi
+  fi
+}
+
+# internet is up
+# if it was down earlier, start agents
+# test for ip address changes
+hl_inet_up()
+{
+  #echo "Flag for if is $HL_F_INETSTAT"
+  if [[ ${HL_F_FIRSTSTART} -eq 1 ]]; then # first start
+
+    HL_F_FIRSTSTART=0
+    if [ -z "$HL_NO_SSH" ]; then
+      hl_sshlink_reset    # restart ssh link checks
+    fi
+    if [ -z "$HL_NO_AGENT" ]; then
+      hl_fa_register_chk   # fa registration is required
+      # hl_all_restart
+    fi
+    hl_ipaddr_set
+    #echo "Internet Up in first start"
+
+  elif [[ ${HL_F_INETSTAT} -eq 0 ]]; then  # edge trigger -- was down now up
+    echo "Internet Back"
+    
+    if [ -z "$HL_NO_SSH" ]; then
+      hl_sshlink_reset   # trigger ssh link checks
+    fi
+    hl_all_restart
+    #hl_ble_stop
+    
+  else #already up
+
+    ((HL_N_UPCOUNT++))
+    if [ "$HL_N_UPCOUNT" -gt "$HL_N_UPCOUNTMAX" ]; then
+      HL_N_UPCOUNT=0
+      if [ ! -f $HL_F_HASXMPP ]; then
+        hl_logf "Restart Agentmgr by timer"
+        hl_all_restart 0 
+      fi
+    fi
+    #echo "Internet Up Already up"
+    hl_ipaddr_chk        # check for ip address change
+    if [ -z "$HL_NO_AGENT" ]; then
+      if [ -n "$HL_FAREG_COMPLETE" ]; then
+        hl_agentmgr_chk    # make sure agentmgr is running, if stoppped, restart it
+      fi
+    fi
+
+  fi
+
+  if [ -z "$HL_NO_FWUPD" ]; then
+    hl_fw_update         # firmware update when it is time
+  fi
+
+  if [ -z "$HL_NO_SSH" ]; then
+    hl_sshlink_chk       # make sure ssh link is active
+  fi
+
+  if [ -z "$HL_NO_FAREG" ]; then
+    hl_fa_register_chk   # fa registration is required
+  fi
+
+  if [ -z "$HL_NO_DNS"]; then
+    hl_dns_collector_start # generate a new dns record file
+  fi
+
+  HL_F_INETSTAT=1
+  HL_N_PINGFAIL=0
+  HL_N_DOWNCOUNT=0
+}
+
+#--------------------------------------------------------------------------------------
+hl_main()
+{
+  mkdir -p tmp
+
+  HL_SCR_LOGFILE=tmp/hlstart.log 
+
+  hl_logf "++++ ++++ ++++ ++++ ++++"
+  hl_logf "hl script starting NOW.."
+
+  hl_set_defaults
+
+  #hl_ble_file_mon
+
+  while true;
+  do
+    # %a  Day of Week, textual
+    # %b  Month, textual, abbreviated
+    # %d  Day, numeric
+    # %r  Timestamp AM/PM
+    # echo -n $(date +"%a, %b %d, %r") "-- "
+    ping -c 1 ${HL_PING_ADDR} > /tmp/ping.$
+
+    if [[ $? -ne 0 ]]; then   
+      hl_inet_down    # ping fails
+    else    
+      hl_inet_up      # ping success
+    fi
+
+    #cat /tmp/ping.$ | head -2 | tail -1
+    sleep $HL_SLEEP_INTERVAL
+  done
+
+  hl_logf "hl script STOPPED"
+  hl_logf "---- ---- ---- ----"
+}
+
+#--------------------------------------------------------------------------------------
+
+hl_main
+
+
