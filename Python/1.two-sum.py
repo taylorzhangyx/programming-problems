@@ -29,14 +29,10 @@
 # 
 # 
 #
+
+from itertools import combinations
 class Solution:
     def twoSum(self, nums: List[int], target: int) -> List[int]:
-        sortedNums = sorted(nums) 
-       
-        headPointer, tailPointer = 0, len(nums) - 1
-        while sortedNums[headPointer] + sortedNums[tailPointer] != target:
-            if sortedNums[headPointer] + sortedNums[tailPointer] < target:
-                headPointer += 1
-            else:
-                tailPointer -= 1
-        return [headPointer, tailPointer]
+        for (i1,num1), (i2,num2) in combinations(enumerate( nums),2):
+            if num1 + num2 == target:
+                return [i1, i2]
