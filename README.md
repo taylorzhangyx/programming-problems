@@ -7,15 +7,19 @@ Write and Collected by Yuxin Zhang
 
 
 ### python
+
+```
 |-- 1.two-sum.py
 |-- 2.add-two-numbers.py
 |-- 3.longest-substring-without-repeating-characters.py
 |-- 7.reverse-integer.py
 |-- 9.palindrome-number.py
 `-- 35.search-insert-position.py
-
+```
 
 ### Java
+
+```
 |-- dataStructure
 |   |-- Interval.java
 |   `-- TreeNode.java
@@ -32,3 +36,4 @@ Write and Collected by Yuxin Zhang
 |   `-- Q253MeetingRoomsII.java
 `-- q301_q350
     `-- Q301RemoveInvalidParentheses.java
+```
