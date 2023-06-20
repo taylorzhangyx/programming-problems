@@ -30,6 +30,56 @@ package leetcode
 // 2 <= k <= 104
 // s only contains lowercase English letters.
 
+// here we use a stack to hold the occurrence of the char and remove them when match the condition
+
+func removeDuplicates(s string, k int) string {
+
+	ans := ""
+	type Counter struct {
+		C     rune
+		Count int
+	}
+
+	stack := make([]Counter, 0, len(s))
+
+	for _, c := range s {
+		size := len(stack)
+		if size == 0 {
+			// nothing in stack, push the current char in
+			stack = append(stack, Counter{
+				C:     c,
+				Count: 1,
+			})
+			continue
+		}
+
+		// here the size is non zero
+		if stack[size-1].C == c {
+			// has the same rune and increase count
+			stack[size-1].Count++
+			if stack[size-1].Count == k {
+				// match the remove condition, remove the last counter
+				stack = stack[:size-1]
+			}
+		} else {
+			// not equal, add to stack
+			stack = append(stack, Counter{
+				C:     c,
+				Count: 1,
+			})
+		}
+	}
+
+	// assemble all the chars in stack to be a string
+	for _, r := range stack {
+		for i := 0; i < r.Count; i++ {
+			ans += string(r.C)
+		}
+	}
+
+	return ans
+}
+
 func removeDuplicates_ver1_time_limit_exceeeded(s string, k int) string {
 
 	i, has := hasDup(s, k)
